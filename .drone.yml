@@ -1,0 +1,131 @@
+---
+kind: pipeline
+type: kubernetes
+name: default
+
+steps:
+# when push to dev
+#  test first, merge dev branch to test if the test is success
+- name: test 
+  image: golang:1.17.5-buster
+  commands:
+  - go test
+  - echo 'test done' # If the latest command failed, will not execute this command 
+  - > 
+    for i in *;
+    do
+      echo $i;
+    done;
+  when:
+    branch: 
+    - dev
+
+- name: merge # If the latest step faild, will not execute this step.  
+  image: golang:1.17.5-buster
+  commands:
+  - git checkout -b test 
+  - git merge dev 
+  - git push --set-upstream origin test   
+  when:
+    branch: 
+    - dev
+
+- name: send notification # If there is a step failed, execute this step  
+  image: chaunceyshannon/drone-plugin-webhook-notification
+  settings:
+    webhook_url: https://notification-webhook.example.com/httpPostRaw
+    title: Do things for dev branch FAILED
+    tag: "#WARN"
+  when:
+    branch: 
+    - dev
+    status:
+    - failure 
+
+# when merge to test
+#   build docker image, push to container image registry and update to test environment for kubernetes
+- name: build for test 
+  # Tutorials abount writing a plugin: https://docs.drone.io/plugins/tutorials/golang/
+  image: banzaicloud/drone-kaniko
+  settings:
+    username: silas # Set as env PLUGIN_USERNAME
+    password: 8Bdh7pnC
+    # password:
+    #   from_secret: docker-password
+    repo: registry.example.com/demo
+    registry: registry.example.com
+    tags: # Value will be set as value1,value2,value3
+    - latest
+    - ${DRONE_COMMIT_SHA}
+
+  when:
+    branch:
+    - test
+
+- name: update to k8s for test 
+  image: chaunceyshannon/kustomize:v4.4.1
+  settings:
+    git_username: gitea
+    git_password: L6CqW5EWr8BFW2g
+    git_repo: https://gitea.example.com/gitea/flux
+    git_branch: master
+    git_app_path: /app/test
+    docker_image: registry.example.com/demo
+    docker_tag: ${DRONE_COMMIT_SHA}
+  when:
+    branch:
+    - test
+
+- name: send notification while test steps failed 
+  image: chaunceyshannon/drone-plugin-webhook-notification
+  settings:
+    webhook_url: https://notification-webhook.example.com/httpPostRaw
+    title: Do things for test branch FAILED
+    tag: "#WARN"
+  when:
+    branch: 
+    - test
+    status:
+    - failure 
+
+# when new tag arrive 
+#   build docker image with the tag, push to container image registry and update to production environment for kubernetes
+- name: build for production 
+  image: banzaicloud/drone-kaniko
+  settings:
+    username: silas
+    password: 8Bdh7pnC
+    repo: registry.example.com/demo
+    registry: registry.example.com
+    tags: 
+    - latest
+    - ${DRONE_TAG}
+  when:
+    event:
+    - tag
+
+- name: update to k8s for production 
+  image: chaunceyshannon/kustomize:v4.4.1
+  settings:
+    git_username: gitea
+    git_password: L6CqW5EWr8BFW2g
+    git_repo: https://gitea.example.com/gitea/flux
+    git_branch: master
+    git_app_path: /app/production
+    docker_image: registry.example.com/demo
+    docker_tag: ${DRONE_TAG}
+  when:
+    event:
+    - tag
+
+- name: send notification while production steps failed 
+  image: chaunceyshannon/drone-plugin-webhook-notification
+  settings:
+    webhook_url: https://notification-webhook.example.com/httpPostRaw
+    title: Do things for tag FAILED
+    tag: "#ERROR"
+  when:
+    event:
+    - tag
+    status:
+    - failure 
